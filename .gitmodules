@@ -1,0 +1,3 @@
+[submodule "deps/tokio-linux-aio"]
+	path = deps/tokio-linux-aio
+	url = https://github.com/lancastr/tokio-linux-aio.git

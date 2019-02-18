@@ -1,0 +1,25 @@
+[package]
+name = "crypto-api"
+version = "0.1.0"
+authors = ["Gleb Pomykalov <gleb@lancastr.com>"]
+edition = "2018"
+
+[dependencies]
+libc = { git = "https://github.com/glebpom/libc" }
+nix = { git = "http://github.com/glebpom/nix.git", rev = "crypto-api" }
+tokio = "0.1.15"
+futures = "0.1.25"
+socket2 = "0.3.8"
+failure = "0.1.5"
+tokio-linux-aio = { path = "deps/tokio-linux-aio" }
+bytes = "0.4.11"
+bitflags = "1.0.4"
+mio = "0.6.16"
+
+[replace]
+"libc:0.2.48" = { git = "https://github.com/glebpom/libc" }
+
+[profile.release]
+opt-level=3
+lto=true
+debug = true
