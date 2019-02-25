@@ -1,10 +1,16 @@
-FROM rust:1.32.0
+FROM cbce687d86226d12869c99e145b87abc0d838213f62146f75cf76e2d93814da5
 
-RUN apt-get update && apt-get install -y strace libclang-dev clang valgrind gdb
+RUN apt-get update && apt-get install -y libclang-dev clang
 
 ADD Cargo.toml /code/Cargo.toml
 ADD Cargo.lock /code/Cargo.lock
 ADD deps /code/deps
+
+ENV HOME=/root
+ENV USER=root
+
+ENV PATH="$HOME/.cargo/bin:$PATH"
+
 RUN mkdir -p /code/src && touch /code/src/lib.rs
 
 WORKDIR /code
@@ -12,9 +18,10 @@ RUN cargo fetch
 
 ADD . /code
 
+ENV RUSTFLAGS="-C target-feature=+neon"
 ENV RUST_BACKTRACE=full
+ENV CC_armv7_unknown_linux_gnueabihf="/buildroot/output/host/bin/arm-buildroot-linux-gnueabihf-gcc"
+ENV SYSROOT=/buildroot/output/host/arm-buildroot-linux-gnueabihf/sysroot
 
-CMD /bin/bash -c "cargo build --example test && RUST_BACKTRACE=full valgrind --num-callers=48 ./target/debug/examples/test"
-#CMD /bin/bash -c "cargo build --release --example test && RUST_BACKTRACE=full ./target/release/examples/test"
-#CMD /bin/bash -c "cargo test"
-#CMD /bin/bash
+CMD /bin/bash -c "source /root/.cargo/env && cargo build --target=armv7-unknown-linux-gnueabihf --release --example test"
+#CMD /bin/bash -c "source /root/.cargo/env && cargo build --target=armv7-unknown-linux-gnueabihf --example test"

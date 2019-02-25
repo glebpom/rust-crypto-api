@@ -5,16 +5,21 @@ extern crate futures;
 extern crate libc;
 #[macro_use]
 extern crate nix;
+#[cfg(feature = "af_alg")]
 extern crate socket2;
 extern crate tokio;
+#[cfg(feature = "af_alg")]
 extern crate tokio_linux_aio;
+#[cfg(feature = "cryptodev")]
 #[macro_use]
 extern crate bitflags;
 extern crate mio;
 
+#[cfg(feature = "af_alg")]
 pub mod af_alg;
 mod algorithms;
 mod aligned_buf;
+#[cfg(feature = "cryptodev")]
 pub mod cryptodev;
 
 pub use aligned_buf::AlignedBuf;
@@ -40,19 +45,27 @@ use nix::fcntl;
 use nix::sys::socket::MsgFlags;
 use nix::sys::socket::{sendmsg, ControlMessage};
 use nix::sys::uio::IoVec;
-use socket2::{Domain, SockAddr, Socket, Type};
 use tokio::prelude::FutureExt;
 use tokio::runtime::current_thread::Runtime;
 
-pub use crate::algorithms::{Cipher, KeySize};
+pub use crate::algorithms::{Cipher, KeySize, Aead, Hash};
 
-pub trait NewSession
+pub trait NewCipherSession
 where
     Self: std::marker::Sized,
 {
-    type Session;
+    type Cipher;
 
-    fn new_cipher(&self, key: &[u8], cipher: &Cipher) -> Result<Self::Session, CryptoApiError>;
+    fn new_cipher(&self, key: &[u8], cipher: &Cipher) -> Result<Self::Cipher, CryptoApiError>;
+}
+
+pub trait NewAeadSession
+where
+    Self: std::marker::Sized,
+{
+    type Aead;
+
+    fn new_aead(&self, key: &[u8], aead: &Aead, aead_auth_len: u8) -> Result<Self::Aead, CryptoApiError>;
 }
 
 #[derive(Debug, Fail)]
@@ -75,8 +88,10 @@ pub enum CryptoApiError {
     AfAlgSocket(#[fail(cause)] io::Error),
     #[fail(display = "AF_ALG bind error: _0")]
     AfAlgBind(#[fail(cause)] io::Error),
+    #[fail(display = "AF_ALG set AEAD auth size error: _0")]
+    AfAlgSetAeadAuthSize(#[fail(cause)] nix::Error),
     #[fail(display = "AF_ALG set key error: _0")]
-    AfAlgSetKey(#[fail(cause)] io::Error),
+    AfAlgSetKey(#[fail(cause)] nix::Error),
     #[fail(display = "AF_ALG read error: _0")]
     AfAlgRead(#[fail(cause)] io::Error),
     #[fail(display = "AF_ALG AIO read error")]

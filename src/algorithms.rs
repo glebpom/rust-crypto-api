@@ -6,102 +6,69 @@ pub enum KeySize {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum CipherType {
-    Symmetric,
-    Asymmetric,
+pub enum Hash {
+    Sha256,
+    Sha224,
+    Sha1,
+    Md5,
+}
+
+impl Hash {
+    pub fn block_len(&self) -> usize {
+        match &self {
+            Hash::Sha256 => 64,
+            Hash::Sha224 => 64,
+            Hash::Sha1 => 64,
+            Hash::Md5 => 64,
+        }
+    }
+
+    pub fn digest_len(&self) -> usize {
+        match &self {
+            Hash::Sha256 => 32,
+            Hash::Sha224 => 28,
+            Hash::Sha1 => 20,
+            Hash::Md5 => 15,        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct CipherInfo {
-    cipher_type: CipherType,
-    key_size: KeySize,
-    block_size: usize,
-    ivsize: usize,
-    //    chunksize: Option<u16>,
-    //    walksize: Option<u16>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct HashInfo {
-    block_size: usize,
-    digest_size: usize,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum Aead {
-    AesGcm(KeySize),
+pub struct Aead {
+    pub cipher: Cipher,
+    pub hmac: Hash,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum Cipher {
     AesCtr(KeySize),
-    //    AesCbc(KeySize),
+    AesCbc(KeySize),
 }
 
 impl Cipher {
     pub fn key_len(&self) -> usize {
         match &self {
             Cipher::AesCtr(k) => *k as usize,
+            Cipher::AesCbc(k) => *k as usize,
         }
     }
 
     pub fn iv_len(&self) -> usize {
         match &self {
             Cipher::AesCtr(_) => 16usize,
+            Cipher::AesCbc(_) => 16usize,
         }
     }
 
     pub fn block_len(&self) -> usize {
         match &self {
             Cipher::AesCtr(_) => 1usize,
+            Cipher::AesCbc(_) => 16usize,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum Hash {
-    Sha1,
-}
-
-#[derive(Debug, Clone, Copy)]
 pub enum Algorithm {
-    //    Aead(Aead),
+    Aead(Aead),
     Cipher(Cipher),
-    //    Hash(Hash),
-}
-
-impl Algorithm {
-    //    pub fn algorithm_type(&self) -> AlgorithmType {
-    //        match *self {
-    //            Algorithm::Aead(Aead::AesGcm(key_size)) => AlgorithmType::Aead {
-    //                cipher: CipherInfo {
-    //                    cipher_type: CipherType::Symmetric,
-    //                    key_size,
-    //                    block_size: 1,
-    //                    ivsize: 12,
-    //                },
-    //                hash: None,
-    //            },
-    //            Algorithm::Cipher(Cipher::AesCtr(key_size)) => AlgorithmType::Cipher(CipherInfo {
-    //                cipher_type: CipherType::Symmetric,
-    //                key_size,
-    //                block_size: 1,
-    //                ivsize: 16,
-    //            }),
-    //            Algorithm::Cipher(Cipher::AesCbc(key_size)) => AlgorithmType::Cipher(CipherInfo {
-    //                cipher_type: CipherType::Symmetric,
-    //                key_size,
-    //                block_size: 16,
-    //                ivsize: 16,
-    //            }),
-    //            Algorithm::Hash(Hash::Sha1) => AlgorithmType::Hash(HashInfo {
-    //                block_size: 64,
-    //                digest_size: 20,
-    //            })
-    //        }
-    //    }
-}
-
-pub struct Session<I> {
-    session: I,
 }

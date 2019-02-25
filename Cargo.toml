@@ -5,21 +5,24 @@ authors = ["Gleb Pomykalov <gleb@lancastr.com>"]
 edition = "2018"
 
 [dependencies]
-libc = { git = "https://github.com/glebpom/libc" }
+libc = "0.2.49"
 nix = { git = "http://github.com/glebpom/nix.git", rev = "crypto-api" }
 tokio = "0.1.15"
 futures = "0.1.25"
-socket2 = "0.3.8"
+socket2 = { version = "0.3.8", optional = true }
 failure = "0.1.5"
-tokio-linux-aio = { path = "deps/tokio-linux-aio" }
+tokio-linux-aio = { path = "deps/tokio-linux-aio", optional = true }
 bytes = "0.4.11"
-bitflags = "1.0.4"
+bitflags = { version = "1.0.4", optional = true }
 mio = "0.6.16"
+extfmt = "0.1.1"
 
-[replace]
-"libc:0.2.48" = { git = "https://github.com/glebpom/libc" }
+[features]
+cryptodev = ["bitflags"]
+af_alg = ["tokio-linux-aio", "socket2"]
+default = ["af_alg"]
 
 [profile.release]
-opt-level=3
-lto=true
-debug = true
+#lto=true
+debug=true
+#opt-level=1

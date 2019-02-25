@@ -21,25 +21,19 @@ use futures::stream;
 use futures::{Future, Stream};
 use nix::fcntl;
 use nix::sys::socket::MsgFlags;
-use nix::sys::socket::{sendmsg, ControlMessage};
+use nix::sys::socket::{sendmsg, ControlMessage, setsockopt};
+use nix::sys::socket::sockopt::{AlgSetKey, AlgSetAeadAuthSize};
 use nix::sys::uio::IoVec;
 use socket2::{Domain, SockAddr, Socket, Type};
 use tokio::prelude::FutureExt;
 use tokio::prelude::*;
 use tokio::runtime::current_thread::Runtime;
 
-use crate::algorithms::Cipher;
+use crate::algorithms::{Cipher, Aead, Hash, KeySize};
 use crate::CryptoApiError;
-use crate::NewSession;
+use crate::NewCipherSession;
+use crate::NewAeadSession;
 
-unsafe fn setsockopt(socket: &Socket, opt: libc::c_int, val: libc::c_int, payload: &[u8]) -> io::Result<()> {
-    let len = payload.len();
-    let payload = payload.as_ptr() as *const _ as *const libc::c_void;
-    if libc::setsockopt(socket.as_raw_fd(), opt, val, payload, len as libc::socklen_t) != 0 {
-        return Err(io::Error::last_os_error());
-    };
-    Ok(())
-}
 //
 //pub struct Session {
 //    socket: Socket,
@@ -99,8 +93,6 @@ pub struct AfAlgSyncCipherSession {
     socket: Socket,
     session_socket: Socket,
     cipher: Cipher,
-    //    driver_name: String,
-    //    is_accelerated: bool,
 }
 
 //
@@ -115,34 +107,95 @@ pub struct AfAlgAsyncCipherSession {
     session_socket: Socket,
     cipher: Cipher,
     aio: tokio_linux_aio::AioContext,
-    //    driver_name: String,
-    //    is_accelerated: bool,
 }
 
-//
 impl fmt::Debug for AfAlgAsyncCipherSession {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         fmt.debug_struct("AfAlgAsyncCipherSession").field("cipher", &self.cipher).finish()
     }
 }
 
-impl NewSession for SyncAfAlg {
-    type Session = AfAlgSyncCipherSession;
+pub struct AfAlgSyncAeadSession {
+    socket: Socket,
+    session_socket: Socket,
+    aead: Aead,
+    aead_auth_len: u8,
+}
+
+impl fmt::Debug for AfAlgSyncAeadSession {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt.debug_struct("AfAlgSyncAeadSession").field("aead", &self.aead).finish()
+    }
+}
+
+pub struct AfAlgAsyncAeadSession {
+    socket: Socket,
+    session_socket: Socket,
+    aead: Aead,
+    aead_auth_len: u8,
+    aio: tokio_linux_aio::AioContext,
+}
+
+impl fmt::Debug for AfAlgAsyncAeadSession {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt.debug_struct("AfAlgAsyncAeadSession").field("aead", &self.aead).finish()
+    }
+}
+
+
+fn aead_to_spec(aead: &Aead) -> (&'static str, &'static str) {
+    match *aead {
+        Aead {
+            cipher: Cipher::AesCbc(_),
+            hmac: Hash::Sha256,
+        } => ("authenc(hmac(sha256),cbc(aes))", "aead"),
+        Aead {
+            cipher: Cipher::AesCbc(_),
+            hmac: Hash::Sha1,
+        } => ("authenc(hmac(sha1),cbc(aes))", "aead"),
+        _ => unimplemented!(),
+    }
+}
+
+fn cipher_to_spec(cipher: &Cipher) -> (&'static str, &'static str) {
+    match *cipher {
+        Cipher::AesCtr(key_size) => ("ctr(aes)", "skcipher"),
+        _ => unimplemented!(),
+    }
+}
+
+fn new_session(salg_name: &str, salg_type: &str, key: Option<&[u8]>, aead_auth_len: Option<u8>) -> Result<(Socket, Socket), CryptoApiError> {
+    let socket = Socket::new(Domain::from(libc::AF_ALG), Type::seqpacket(), None).map_err(CryptoApiError::AfAlgSocket)?;
+    let mut saddr: libc::sockaddr_alg = unsafe { mem::zeroed() };
+    saddr.salg_family = libc::AF_ALG as u16;
+    saddr.salg_type[..salg_type.len()].copy_from_slice(salg_type.to_string().as_bytes());
+    saddr.salg_name[..salg_name.len()].copy_from_slice(salg_name.to_string().as_bytes());
+    let sock_addr = unsafe { SockAddr::from_raw_parts(&saddr as *const _ as *const libc::sockaddr, mem::size_of::<libc::sockaddr_alg>() as libc::socklen_t) };
+    socket.bind(&sock_addr).map_err(CryptoApiError::AfAlgBind)?;
+    if let Some(aead_auth_len) = aead_auth_len {
+        // case ALG_SET_AEAD_AUTHSIZE:
+        //   if (sock->state == SS_CONNECTED)
+        //       goto unlock;
+        //   if (!type->setauthsize)
+        //       goto unlock;
+        //   err = type->setauthsize(ask->private, optlen);
+
+//        setsockopt(socket.as_raw_fd(), AlgSetAeadAuthSize, &aead_auth_len).map_err(CryptoApiError::AfAlgSetKey)?;
+    }
+    if let Some(key) = key {
+        let key = key.to_vec();
+        setsockopt(socket.as_raw_fd(), AlgSetKey::default(), &key).map_err(CryptoApiError::AfAlgSetKey)?;
+    }
+    let session_socket = unsafe { Socket::from_raw_fd(libc::accept(socket.as_raw_fd(), ptr::null_mut(), &mut 0 as *mut _ as *mut libc::socklen_t)) };
+    Ok((socket, session_socket))
+}
+
+impl NewCipherSession for SyncAfAlg {
+    type Cipher = AfAlgSyncCipherSession;
 
     fn new_cipher(&self, key: &[u8], cipher: &Cipher) -> Result<AfAlgSyncCipherSession, CryptoApiError> {
-        let (salg_name, salg_type) = match *cipher {
-            Cipher::AesCtr(key_size) => ("ctr(aes)", "skcipher"),
-        };
-
-        let socket = Socket::new(Domain::from(libc::AF_ALG), Type::seqpacket(), None).map_err(CryptoApiError::AfAlgSocket)?;
-        let mut saddr: libc::sockaddr_alg = unsafe { mem::zeroed() };
-        saddr.salg_family = libc::AF_ALG as u16;
-        saddr.salg_type[..salg_type.len()].copy_from_slice(salg_type.to_string().as_bytes());
-        saddr.salg_name[..salg_name.len()].copy_from_slice(salg_name.to_string().as_bytes());
-        let sock_addr = unsafe { SockAddr::from_raw_parts(&saddr as *const _ as *const libc::sockaddr, mem::size_of::<libc::sockaddr_alg>() as libc::socklen_t) };
-        socket.bind(&sock_addr).map_err(CryptoApiError::AfAlgBind)?;
-        unsafe { setsockopt(&socket, libc::SOL_ALG, libc::ALG_SET_KEY, key) }.map_err(CryptoApiError::AfAlgSetKey)?;
-        let session_socket = unsafe { Socket::from_raw_fd(libc::accept(socket.as_raw_fd(), ptr::null_mut(), &mut 0 as *mut _ as *mut libc::socklen_t)) };
+        let (salg_name, salg_type) = cipher_to_spec(cipher);
+        let (socket, session_socket) = new_session(salg_name, salg_type, Some(key), None)?;
         Ok(AfAlgSyncCipherSession {
             socket,
             session_socket,
@@ -151,28 +204,48 @@ impl NewSession for SyncAfAlg {
     }
 }
 
-impl NewSession for AsyncAfAlg {
-    type Session = AfAlgAsyncCipherSession;
+impl NewCipherSession for AsyncAfAlg {
+    type Cipher = AfAlgAsyncCipherSession;
 
     fn new_cipher(&self, key: &[u8], cipher: &Cipher) -> Result<AfAlgAsyncCipherSession, CryptoApiError> {
-        let (salg_name, salg_type) = match *cipher {
-            Cipher::AesCtr(key_size) => ("ctr(aes)", "skcipher"),
-        };
-
-        let socket = Socket::new(Domain::from(libc::AF_ALG), Type::seqpacket(), None).map_err(CryptoApiError::AfAlgSocket)?;
-        let mut saddr: libc::sockaddr_alg = unsafe { mem::zeroed() };
-        saddr.salg_family = libc::AF_ALG as u16;
-        saddr.salg_type[..salg_type.len()].copy_from_slice(salg_type.to_string().as_bytes());
-        saddr.salg_name[..salg_name.len()].copy_from_slice(salg_name.to_string().as_bytes());
-        let sock_addr = unsafe { SockAddr::from_raw_parts(&saddr as *const _ as *const libc::sockaddr, mem::size_of::<libc::sockaddr_alg>() as libc::socklen_t) };
-        socket.bind(&sock_addr).map_err(CryptoApiError::AfAlgBind)?;
-        unsafe { setsockopt(&socket, libc::SOL_ALG, libc::ALG_SET_KEY, key) }.map_err(CryptoApiError::AfAlgSetKey)?;
-        let session_socket = unsafe { Socket::from_raw_fd(libc::accept(socket.as_raw_fd(), ptr::null_mut(), &mut 0 as *mut _ as *mut libc::socklen_t)) };
+        let (salg_name, salg_type) = cipher_to_spec(cipher);
+        let (socket, session_socket) = new_session(salg_name, salg_type, Some(key), None)?;
         Ok(AfAlgAsyncCipherSession {
             socket,
             session_socket,
             cipher: *cipher,
             aio: self.aio.clone(),
+        })
+    }
+}
+
+impl NewAeadSession for AsyncAfAlg {
+    type Aead = AfAlgAsyncAeadSession;
+
+    fn new_aead(&self, key: &[u8], aead: &Aead, aead_auth_len: u8) -> Result<Self::Aead, CryptoApiError> {
+        let (salg_name, salg_type) = aead_to_spec(aead);
+        let (socket, session_socket) = new_session(salg_name, salg_type, Some(key), Some(aead_auth_len))?;
+        Ok(AfAlgAsyncAeadSession {
+            socket,
+            session_socket,
+            aead: *aead,
+            aead_auth_len,
+            aio: self.aio.clone(),
+        })
+    }
+}
+
+impl NewAeadSession for SyncAfAlg {
+    type Aead = AfAlgSyncAeadSession;
+
+    fn new_aead(&self, key: &[u8], aead: &Aead, aead_auth_len: u8) -> Result<Self::Aead, CryptoApiError> {
+        let (salg_name, salg_type) = aead_to_spec(aead);
+        let (socket, session_socket) = new_session(salg_name, salg_type, Some(key), Some(aead_auth_len))?;
+        Ok(AfAlgSyncAeadSession {
+            socket,
+            session_socket,
+            aead: *aead,
+            aead_auth_len: 0
         })
     }
 }
@@ -198,15 +271,7 @@ impl AfAlgSyncCipherSession {
 
         let set_op_code = op.set_op_code();
 
-        let mut iv_storage = vec![0u8; iv.len() + mem::size_of::<libc::af_alg_iv>()];
-        let iv_storage = unsafe { mem::transmute::<_, *mut libc::af_alg_iv>(iv_storage.as_mut_ptr()) };
-        unsafe {
-            (*iv_storage).ivlen = iv.len() as u32;
-            ptr::copy_nonoverlapping(iv.as_ptr(), (*iv_storage).iv.as_mut_ptr(), iv.len());
-        };
-        let set_iv = &unsafe { *iv_storage };
-
-        let msgs = [ControlMessage::AlgSetOp(&set_op_code), ControlMessage::AlgSetIv(set_iv)];
+        let msgs = [ControlMessage::AlgSetOp(&set_op_code), ControlMessage::AlgSetIv(iv)];
         let iov = IoVec::from_slice(payload);
         sendmsg(self.session_socket.as_raw_fd(), &[iov], &msgs, MsgFlags::empty(), None).map_err(CryptoApiError::AfAlgSendMsg)?;
 
@@ -240,17 +305,9 @@ impl AfAlgAsyncCipherSession {
         assert_eq!(iv.len(), self.cipher.iv_len());
         assert_eq!(payload.len() % self.cipher.block_len(), 0);
 
-        let mut iv_storage = vec![0u8; iv.len() + mem::size_of::<libc::af_alg_iv>()];
-        let iv_storage = unsafe { mem::transmute::<_, *mut libc::af_alg_iv>(iv_storage.as_mut_ptr()) };
-        unsafe {
-            (*iv_storage).ivlen = iv.len() as u32;
-            ptr::copy_nonoverlapping(iv.as_ptr(), (*iv_storage).iv.as_mut_ptr(), iv.len());
-        };
-        let set_iv = &unsafe { *iv_storage };
-
         let set_op_code = op.set_op_code();
 
-        let msgs = [ControlMessage::AlgSetOp(&set_op_code), ControlMessage::AlgSetIv(set_iv)];
+        let msgs = [ControlMessage::AlgSetOp(&set_op_code), ControlMessage::AlgSetIv(iv)];
         let iov = IoVec::from_slice(payload);
 
         let payload = payload.to_vec();
@@ -260,6 +317,42 @@ impl AfAlgAsyncCipherSession {
             .into_future()
             .and_then(move |_| {
                 let mut buf = vec![0u8; payload.len()];
+
+                self.aio
+                    .read(self.session_socket.as_raw_fd(), 0, buf)
+                    .map_err(|_| CryptoApiError::AfAlgAsyncRead)
+                    .map(|res| (self, res))
+            })
+    }
+
+    pub fn encrypt_future(self, iv: &[u8], payload: &[u8]) -> impl Future<Item = (Self, Vec<u8>), Error = CryptoApiError> {
+        self.perform(Operation::Encrypt, iv, payload)
+    }
+
+    pub fn decrypt_future(self, iv: &[u8], payload: &[u8]) -> impl Future<Item = (Self, Vec<u8>), Error = CryptoApiError> {
+        self.perform(Operation::Decrypt, iv, payload)
+    }
+}
+
+impl AfAlgAsyncAeadSession {
+    fn perform(self, op: Operation, iv: &[u8], payload: &[u8]) -> impl Future<Item = (Self, Vec<u8>), Error = CryptoApiError> {
+//        assert_eq!(iv.len(), self.aead.cipher.iv_len());
+//        assert_eq!(payload.len() % self.aead.cipher.block_len(), 0);
+
+        let aead_auth_len = self.aead_auth_len;
+
+        let set_op_code = op.set_op_code();
+
+        let msgs = [ControlMessage::AlgSetOp(&set_op_code), ControlMessage::AlgSetIv(iv)];
+        let iov = IoVec::from_slice(payload);
+
+        let payload = payload.to_vec();
+
+        sendmsg(self.session_socket.as_raw_fd(), &[iov], &msgs, MsgFlags::empty(), None)
+            .map_err(CryptoApiError::AfAlgSendMsg)
+            .into_future()
+            .and_then(move |_| {
+                let mut buf = vec![0u8; payload.len() + aead_auth_len as usize];
 
                 self.aio
                     .read(self.session_socket.as_raw_fd(), 0, buf)
