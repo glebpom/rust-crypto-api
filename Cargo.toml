@@ -6,12 +6,12 @@ edition = "2018"
 
 [dependencies]
 libc = "0.2.49"
-nix = { git = "http://github.com/glebpom/nix.git", rev = "crypto-api" }
+nix = "0.15.0"
 tokio = "0.1.15"
 futures = "0.1.25"
 socket2 = { version = "0.3.8", optional = true }
 failure = "0.1.5"
-tokio-linux-aio = { path = "deps/tokio-linux-aio", optional = true }
+tokio-linux-aio = {git = "https://github.com/lancastr/tokio-linux-aio.git", optional = true }
 bytes = "0.4.11"
 bitflags = { version = "1.0.4", optional = true }
 mio = "0.6.16"
